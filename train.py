@@ -1,76 +1,173 @@
 import os
 import json
 import re
+
 import torch
 import torch.nn as nn
-from models.model_01 import Model01
+import torch.optim as optim
+
+from model import KIModel
+
 
 DATEN_ORDNER = "Daten"
-MODELS_ORDNER = "models"
-MODELL_DATEI = os.path.join(MODELS_ORDNER, "model_01.pt")
+MODEL_ORDNER = "models"
+MODEL_DATEI = os.path.join(MODEL_ORDNER, "model_01.pt")
 
 
-def text_zu_woertern(text):
-    return re.findall(r"\w+", text.lower(), re.UNICODE)
-
+# --------------------------------------------------
+# 1. JSON-Daten laden
+# --------------------------------------------------
 
 def daten_laden():
     daten = []
 
+    if not os.path.exists(DATEN_ORDNER):
+        print("Fehler: Der Ordner 'Daten' existiert nicht.")
+        return daten
+
     for dateiname in os.listdir(DATEN_ORDNER):
-        if not dateiname.endswith(".json"):
+
+        if not dateiname.lower().endswith(".json"):
             continue
 
         pfad = os.path.join(DATEN_ORDNER, dateiname)
 
-        with open(pfad, "r", encoding="utf-8") as datei:
-            inhalt = json.load(datei)
+        try:
+            with open(pfad, "r", encoding="utf-8") as datei:
+                inhalt = json.load(datei)
 
-        if isinstance(inhalt, list):
-            daten.extend(inhalt)
+            if isinstance(inhalt, list):
+                daten.extend(inhalt)
+                print(f"Geladen: {dateiname} ({len(inhalt)} Einträge)")
+
+        except Exception as fehler:
+            print(f"Fehler beim Laden von {dateiname}: {fehler}")
 
     return daten
 
 
+# --------------------------------------------------
+# 2. Text in Wörter zerlegen
+# --------------------------------------------------
+
+def tokenisieren(text):
+    return re.findall(r"\w+|[^\w\s]", text.lower(), re.UNICODE)
+
+
+# --------------------------------------------------
+# 3. Vokabular erstellen
+# --------------------------------------------------
+
+def vokabular_erstellen(daten):
+
+    vokabular = {
+        "<UNK>": 0
+    }
+
+    for eintrag in daten:
+
+        frage = eintrag.get("frage", "")
+
+        for token in tokenisieren(frage):
+
+            if token not in vokabular:
+                vokabular[token] = len(vokabular)
+
+    return vokabular
+
+
+# --------------------------------------------------
+# 4. Frage in Zahlen umwandeln
+# --------------------------------------------------
+
+def frage_vektor(frage, vokabular):
+
+    vektor = torch.zeros(len(vokabular))
+
+    for token in tokenisieren(frage):
+
+        nummer = vokabular.get(token, 0)
+
+        vektor[nummer] += 1
+
+    return vektor
+
+
+# --------------------------------------------------
+# 5. Antworten nummerieren
+# --------------------------------------------------
+
+def antworten_erstellen(daten):
+
+    antworten = []
+
+    for eintrag in daten:
+
+        antwort = eintrag.get("antwort", "")
+
+        if antwort not in antworten:
+            antworten.append(antwort)
+
+    return antworten
+
+
+# --------------------------------------------------
+# 6. Training
+# --------------------------------------------------
+
 def trainieren():
+
+    print("")
+    print("================================")
+    print("      TRAINING STARTET")
+    print("================================")
+    print("")
+
     daten = daten_laden()
 
     if not daten:
         print("Keine Trainingsdaten gefunden.")
         return
 
-    # Vokabular erstellen
-    vokabular = {}
+    print("")
+    print(f"Trainingsbeispiele: {len(daten)}")
 
-    for eintrag in daten:
-        for wort in text_zu_woertern(eintrag["frage"]):
-            if wort not in vokabular:
-                vokabular[wort] = len(vokabular)
+    vokabular = vokabular_erstellen(daten)
 
-    # Antworten bekommen IDs
-    antworten = []
+    print(f"Vokabular: {len(vokabular)} Wörter")
 
-    for eintrag in daten:
-        if eintrag["antwort"] not in antworten:
-            antworten.append(eintrag["antwort"])
+    antworten = antworten_erstellen(daten)
 
+    print(f"Antwortklassen: {len(antworten)}")
+
+    # Fragen und Zielwerte vorbereiten
     X = []
-    y = []
+    Y = []
 
     for eintrag in daten:
-        vektor = [0.0] * len(vokabular)
 
-        for wort in text_zu_woertern(eintrag["frage"]):
-            if wort in vokabular:
-                vektor[vokabular[wort]] = 1.0
+        frage = eintrag.get("frage", "")
+        antwort = eintrag.get("antwort", "")
 
-        X.append(vektor)
-        y.append(antworten.index(eintrag["antwort"]))
+        if not frage or not antwort:
+            continue
 
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.long)
+        X.append(frage_vektor(frage, vokabular))
+        Y.append(antworten.index(antwort))
 
-    modell = Model01(
+    X = torch.stack(X)
+    Y = torch.tensor(Y, dtype=torch.long)
+
+    print("")
+    print("Daten vorbereitet.")
+    print(f"Input-Größe: {X.shape[1]}")
+    print(f"Output-Größe: {len(antworten)}")
+
+    # --------------------------------------------------
+    # Modell erstellen
+    # --------------------------------------------------
+
+    modell = KIModel(
         input_size=len(vokabular),
         hidden_size=128,
         output_size=len(antworten)
@@ -78,40 +175,81 @@ def trainieren():
 
     verlustfunktion = nn.CrossEntropyLoss()
 
-    optimizer = torch.optim.Adam(
+    optimizer = optim.Adam(
         modell.parameters(),
         lr=0.001
     )
 
-    print("Training gestartet...")
+    # --------------------------------------------------
+    # Training
+    # --------------------------------------------------
 
-    for epoche in range(300):
+    epochen = 500
+
+    print("")
+    print("Training...")
+    print("")
+
+    for epoche in range(epochen):
+
         optimizer.zero_grad()
 
         ausgabe = modell(X)
 
-        verlust = verlustfunktion(ausgabe, y)
+        verlust = verlustfunktion(
+            ausgabe,
+            Y
+        )
 
         verlust.backward()
+
         optimizer.step()
 
-        if (epoche + 1) % 50 == 0:
-            print(
-                f"Epoche {epoche + 1}/300 "
-                f"| Verlust: {verlust.item():.4f}"
+        if (epoche + 1) % 25 == 0:
+
+            vorhersagen = torch.argmax(
+                ausgabe,
+                dim=1
             )
 
-    os.makedirs(MODELS_ORDNER, exist_ok=True)
+            genauigkeit = (
+                vorhersagen == Y
+            ).float().mean().item() * 100
 
-    torch.save({
+            print(
+                f"Epoche {epoche + 1}/{epochen} | "
+                f"Verlust: {verlust.item():.4f} | "
+                f"Genauigkeit: {genauigkeit:.1f}%"
+            )
+
+    # --------------------------------------------------
+    # Modell speichern
+    # --------------------------------------------------
+
+    os.makedirs(
+        MODEL_ORDNER,
+        exist_ok=True
+    )
+
+    speicherstand = {
         "model_state": modell.state_dict(),
         "vokabular": vokabular,
         "antworten": antworten
-    }, MODELL_DATEI)
+    }
 
-    print()
-    print("Training abgeschlossen!")
-    print(f"Modell gespeichert: {MODELL_DATEI}")
+    torch.save(
+        speicherstand,
+        MODEL_DATEI
+    )
+
+    print("")
+    print("================================")
+    print("       TRAINING FERTIG")
+    print("================================")
+    print("")
+    print(f"Modell gespeichert:")
+    print(MODEL_DATEI)
+    print("")
 
 
 if __name__ == "__main__":
