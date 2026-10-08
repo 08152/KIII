@@ -1,0 +1,26 @@
+[
+  {
+    "frage": "Hallo",
+    "antwort": "Hallo! Schön, dass du da bist."
+  },
+  {
+    "frage": "Hi",
+    "antwort": "Hi! Wie kann ich dir helfen?"
+  },
+  {
+    "frage": "Wie heißt du?",
+    "antwort": "Ich bin deine eigene KI."
+  },
+  {
+    "frage": "Was bist du?",
+    "antwort": "Ich bin eine selbst entwickelte KI."
+  },
+  {
+    "frage": "Was kannst du?",
+    "antwort": "Im Moment kann ich Antworten aus meinem Datensatz finden."
+  },
+  {
+    "frage": "Tschüss",
+    "antwort": "Tschüss! Bis zum nächsten Mal."
+  }
+]
