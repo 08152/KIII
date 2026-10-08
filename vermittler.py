@@ -1,77 +1,134 @@
 import os
-import json
-import re
-import math
+import torch
 
-DATEN_ORDNER = "Daten"
-
-
-def daten_laden():
-    alle_daten = []
-
-    if not os.path.exists(DATEN_ORDNER):
-        return alle_daten
-
-    for dateiname in os.listdir(DATEN_ORDNER):
-        if not dateiname.lower().endswith(".json"):
-            continue
-
-        pfad = os.path.join(DATEN_ORDNER, dateiname)
-
-        try:
-            with open(pfad, "r", encoding="utf-8") as datei:
-                daten = json.load(datei)
-
-            if isinstance(daten, list):
-                alle_daten.extend(daten)
-
-        except Exception as fehler:
-            print(f"Fehler in {dateiname}: {fehler}")
-
-    return alle_daten
+from model import KIModel
+from tokenizer import Tokenizer
 
 
-def woerter(text):
-    return set(
-        re.findall(r"\w+", text.lower(), re.UNICODE)
+MODEL_DATEI = "models/model_01.pt"
+
+modell = None
+tokenizer = None
+
+
+def modell_laden():
+
+    global modell
+    global tokenizer
+
+    if not os.path.exists(MODEL_DATEI):
+        print("Kein trainiertes Modell gefunden.")
+        return False
+
+    daten = torch.load(
+        MODEL_DATEI,
+        map_location="cpu"
     )
 
+    tokenizer = Tokenizer()
+    tokenizer.vokabular = daten["vokabular"]
 
-def aehnlichkeit(frage1, frage2):
-    woerter1 = woerter(frage1)
-    woerter2 = woerter(frage2)
+    tokenizer.umgekehrt = {
+        nummer: token
+        for token, nummer
+        in tokenizer.vokabular.items()
+    }
 
-    if not woerter1 or not woerter2:
-        return 0.0
+    config = daten["config"]
 
-    gemeinsame_woerter = woerter1 & woerter2
+    modell = KIModel(
+        vocab_size=config["vocab_size"],
+        embedding_size=config["embedding_size"],
+        hidden_size=config["hidden_size"]
+    )
 
-    gesamt = woerter1 | woerter2
+    modell.load_state_dict(
+        daten["model_state"]
+    )
 
-    return len(gemeinsame_woerter) / len(gesamt)
+    modell.eval()
+
+    print("Modell erfolgreich geladen.")
+
+    return True
+
+
+def antwort_generieren(
+    frage,
+    max_tokens=80,
+    temperatur=0.8
+):
+
+    if modell is None:
+
+        if not modell_laden():
+            return "Mein Modell wurde noch nicht trainiert."
+
+    start_id = tokenizer.vokabular.get(
+        "<START>",
+        2
+    )
+
+    end_id = tokenizer.vokabular.get(
+        "<END>",
+        3
+    )
+
+    tokens = tokenizer.encode(frage)
+
+    eingabe = [start_id] + tokens
+
+    hidden = None
+
+    erzeugte_tokens = []
+
+    with torch.no_grad():
+
+        for _ in range(max_tokens):
+
+            x = torch.tensor(
+                [eingabe],
+                dtype=torch.long
+            )
+
+            ausgabe, hidden = modell(
+                x,
+                hidden
+            )
+
+            logits = ausgabe[0, -1]
+
+            logits = logits / temperatur
+
+            wahrscheinlichkeiten = torch.softmax(
+                logits,
+                dim=-1
+            )
+
+            naechster_token = torch.multinomial(
+                wahrscheinlichkeiten,
+                1
+            ).item()
+
+            if naechster_token == end_id:
+                break
+
+            erzeugte_tokens.append(
+                naechster_token
+            )
+
+            eingabe = [naechster_token]
+
+    antwort = tokenizer.decode(
+        erzeugte_tokens
+    )
+
+    if not antwort.strip():
+        return "Ich weiß noch nicht, was ich darauf antworten soll."
+
+    return antwort
 
 
 def antwort_finden(frage):
-    daten = daten_laden()
 
-    if not daten:
-        return "Ich habe noch keine Daten gelernt."
-
-    beste_antwort = None
-    bester_wert = 0.0
-
-    for eintrag in daten:
-        gespeicherte_frage = eintrag.get("frage", "")
-        antwort = eintrag.get("antwort", "")
-
-        wert = aehnlichkeit(frage, gespeicherte_frage)
-
-        if wert > bester_wert:
-            bester_wert = wert
-            beste_antwort = antwort
-
-    # Mindestähnlichkeit
-    if bester_wert >= 0.25:
-        return beste_antwort
-
-    return "Das habe ich noch nicht gelernt."
+    return antwort_generieren(frage)
