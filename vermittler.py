@@ -1,5 +1,8 @@
+```python
 import os
 import json
+import re
+import math
 
 DATEN_ORDNER = "Daten"
 
@@ -29,13 +32,48 @@ def daten_laden():
     return alle_daten
 
 
+def woerter(text):
+    return set(
+        re.findall(r"\w+", text.lower(), re.UNICODE)
+    )
+
+
+def aehnlichkeit(frage1, frage2):
+    woerter1 = woerter(frage1)
+    woerter2 = woerter(frage2)
+
+    if not woerter1 or not woerter2:
+        return 0.0
+
+    gemeinsame_woerter = woerter1 & woerter2
+
+    gesamt = woerter1 | woerter2
+
+    return len(gemeinsame_woerter) / len(gesamt)
+
+
 def antwort_finden(frage):
     daten = daten_laden()
 
+    if not daten:
+        return "Ich habe noch keine Daten gelernt."
+
+    beste_antwort = None
+    bester_wert = 0.0
+
     for eintrag in daten:
         gespeicherte_frage = eintrag.get("frage", "")
+        antwort = eintrag.get("antwort", "")
 
-        if frage.strip().lower() == gespeicherte_frage.strip().lower():
-            return eintrag.get("antwort", "")
+        wert = aehnlichkeit(frage, gespeicherte_frage)
+
+        if wert > bester_wert:
+            bester_wert = wert
+            beste_antwort = antwort
+
+    # Mindestähnlichkeit
+    if bester_wert >= 0.25:
+        return beste_antwort
 
     return "Das habe ich noch nicht gelernt."
+```
