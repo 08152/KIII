@@ -1,14 +1,21 @@
-import json
 import os
-from tokenizer import Tokenizer
+import json
+import re
+import torch
+import torch.nn as nn
+from models.model_01 import Model01
 
 DATEN_ORDNER = "Daten"
-MODELL_DATEI = "vokabular.json"
+MODELS_ORDNER = "models"
+MODELL_DATEI = os.path.join(MODELS_ORDNER, "model_01.pt")
+
+
+def text_zu_woertern(text):
+    return re.findall(r"\w+", text.lower(), re.UNICODE)
 
 
 def daten_laden():
-    fragen = []
-    antworten = []
+    daten = []
 
     for dateiname in os.listdir(DATEN_ORDNER):
         if not dateiname.endswith(".json"):
@@ -17,53 +24,94 @@ def daten_laden():
         pfad = os.path.join(DATEN_ORDNER, dateiname)
 
         with open(pfad, "r", encoding="utf-8") as datei:
-            daten = json.load(datei)
+            inhalt = json.load(datei)
 
-        for eintrag in daten:
-            frage = eintrag.get("frage")
-            antwort = eintrag.get("antwort")
+        if isinstance(inhalt, list):
+            daten.extend(inhalt)
 
-            if frage and antwort:
-                fragen.append(frage)
-                antworten.append(antwort)
-
-    return fragen, antworten
+    return daten
 
 
 def trainieren():
-    print("Lade Datensatz...")
+    daten = daten_laden()
 
-    fragen, antworten = daten_laden()
+    if not daten:
+        print("Keine Trainingsdaten gefunden.")
+        return
 
-    print(f"{len(fragen)} Datensätze gefunden.")
+    # Vokabular erstellen
+    vokabular = {}
 
-    tokenizer = Tokenizer()
+    for eintrag in daten:
+        for wort in text_zu_woertern(eintrag["frage"]):
+            if wort not in vokabular:
+                vokabular[wort] = len(vokabular)
 
-    tokenizer.vokabular_erstellen(fragen)
+    # Antworten bekommen IDs
+    antworten = []
 
-    print(f"Vokabular: {len(tokenizer.vokabular)} Wörter/Zeichen")
+    for eintrag in daten:
+        if eintrag["antwort"] not in antworten:
+            antworten.append(eintrag["antwort"])
 
-    daten = {
-        "vokabular": tokenizer.vokabular,
-        "beispiele": []
-    }
+    X = []
+    y = []
 
-    for frage, antwort in zip(fragen, antworten):
-        daten["beispiele"].append({
-            "frage": tokenizer.encode(frage),
-            "antwort": antwort
-        })
+    for eintrag in daten:
+        vektor = [0.0] * len(vokabular)
 
-    with open(MODELL_DATEI, "w", encoding="utf-8") as datei:
-        json.dump(
-            daten,
-            datei,
-            ensure_ascii=False,
-            indent=2
-        )
+        for wort in text_zu_woertern(eintrag["frage"]):
+            if wort in vokabular:
+                vektor[vokabular[wort]] = 1.0
 
-    print("Training abgeschlossen.")
-    print(f"Gespeichert als: {MODELL_DATEI}")
+        X.append(vektor)
+        y.append(antworten.index(eintrag["antwort"]))
+
+    X = torch.tensor(X, dtype=torch.float32)
+    y = torch.tensor(y, dtype=torch.long)
+
+    modell = Model01(
+        input_size=len(vokabular),
+        hidden_size=128,
+        output_size=len(antworten)
+    )
+
+    verlustfunktion = nn.CrossEntropyLoss()
+
+    optimizer = torch.optim.Adam(
+        modell.parameters(),
+        lr=0.001
+    )
+
+    print("Training gestartet...")
+
+    for epoche in range(300):
+        optimizer.zero_grad()
+
+        ausgabe = modell(X)
+
+        verlust = verlustfunktion(ausgabe, y)
+
+        verlust.backward()
+        optimizer.step()
+
+        if (epoche + 1) % 50 == 0:
+            print(
+                f"Epoche {epoche + 1}/300 "
+                f"| Verlust: {verlust.item():.4f}"
+            )
+
+    os.makedirs(MODELS_ORDNER, exist_ok=True)
+
+    torch.save({
+        "model_state": modell.state_dict(),
+        "vokabular": vokabular,
+        "antworten": antworten
+    }, MODELL_DATEI)
+
+    print()
+    print("Training abgeschlossen!")
+    print(f"Modell gespeichert: {MODELL_DATEI}")
 
 
 if __name__ == "__main__":
