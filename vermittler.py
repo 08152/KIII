@@ -75,4 +75,3 @@ def antwort_finden(frage):
         return beste_antwort
 
     return "Das habe ich noch nicht gelernt."
-```
