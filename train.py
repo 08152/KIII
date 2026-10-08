@@ -1,12 +1,11 @@
 import os
 import json
-import re
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from model import KIModel
+from tokenizer import Tokenizer
 
 
 DATEN_ORDNER = "Daten"
@@ -14,191 +13,234 @@ MODEL_ORDNER = "models"
 MODEL_DATEI = os.path.join(MODEL_ORDNER, "model_01.pt")
 
 
-# --------------------------------------------------
-# 1. JSON-Daten laden
-# --------------------------------------------------
+# ----------------------------------------
+# Daten laden
+# ----------------------------------------
 
 def daten_laden():
-    daten = []
+
+    texte = []
 
     if not os.path.exists(DATEN_ORDNER):
-        print("Fehler: Der Ordner 'Daten' existiert nicht.")
-        return daten
+        print("Daten-Ordner nicht gefunden.")
+        return texte
 
     for dateiname in os.listdir(DATEN_ORDNER):
 
-        if not dateiname.lower().endswith(".json"):
+        if not dateiname.endswith(".json"):
             continue
 
-        pfad = os.path.join(DATEN_ORDNER, dateiname)
+        pfad = os.path.join(
+            DATEN_ORDNER,
+            dateiname
+        )
 
         try:
-            with open(pfad, "r", encoding="utf-8") as datei:
-                inhalt = json.load(datei)
 
-            if isinstance(inhalt, list):
-                daten.extend(inhalt)
-                print(f"Geladen: {dateiname} ({len(inhalt)} Einträge)")
+            with open(
+                pfad,
+                "r",
+                encoding="utf-8"
+            ) as datei:
+
+                daten = json.load(datei)
+
+            if isinstance(daten, list):
+
+                for eintrag in daten:
+
+                    frage = eintrag.get(
+                        "frage",
+                        ""
+                    )
+
+                    antwort = eintrag.get(
+                        "antwort",
+                        ""
+                    )
+
+                    if frage and antwort:
+
+                        # Frage und Antwort werden
+                        # zu einem Trainingsbeispiel
+                        text = (
+                            "<START> "
+                            + frage
+                            + " "
+                            + antwort
+                            + " <END>"
+                        )
+
+                        texte.append(text)
+
+                print(
+                    f"{dateiname}: "
+                    f"{len(daten)} Einträge"
+                )
 
         except Exception as fehler:
-            print(f"Fehler beim Laden von {dateiname}: {fehler}")
 
-    return daten
+            print(
+                f"Fehler bei {dateiname}: "
+                f"{fehler}"
+            )
 
-
-# --------------------------------------------------
-# 2. Text in Wörter zerlegen
-# --------------------------------------------------
-
-def tokenisieren(text):
-    return re.findall(r"\w+|[^\w\s]", text.lower(), re.UNICODE)
+    return texte
 
 
-# --------------------------------------------------
-# 3. Vokabular erstellen
-# --------------------------------------------------
-
-def vokabular_erstellen(daten):
-
-    vokabular = {
-        "<UNK>": 0
-    }
-
-    for eintrag in daten:
-
-        frage = eintrag.get("frage", "")
-
-        for token in tokenisieren(frage):
-
-            if token not in vokabular:
-                vokabular[token] = len(vokabular)
-
-    return vokabular
-
-
-# --------------------------------------------------
-# 4. Frage in Zahlen umwandeln
-# --------------------------------------------------
-
-def frage_vektor(frage, vokabular):
-
-    vektor = torch.zeros(len(vokabular))
-
-    for token in tokenisieren(frage):
-
-        nummer = vokabular.get(token, 0)
-
-        vektor[nummer] += 1
-
-    return vektor
-
-
-# --------------------------------------------------
-# 5. Antworten nummerieren
-# --------------------------------------------------
-
-def antworten_erstellen(daten):
-
-    antworten = []
-
-    for eintrag in daten:
-
-        antwort = eintrag.get("antwort", "")
-
-        if antwort not in antworten:
-            antworten.append(antwort)
-
-    return antworten
-
-
-# --------------------------------------------------
-# 6. Training
-# --------------------------------------------------
+# ----------------------------------------
+# Training
+# ----------------------------------------
 
 def trainieren():
 
-    print("")
-    print("================================")
-    print("      TRAINING STARTET")
-    print("================================")
-    print("")
+    print()
+    print("==============================")
+    print("     KI-TRAINING START")
+    print("==============================")
+    print()
 
-    daten = daten_laden()
+    texte = daten_laden()
 
-    if not daten:
+    if not texte:
+
         print("Keine Trainingsdaten gefunden.")
         return
 
-    print("")
-    print(f"Trainingsbeispiele: {len(daten)}")
+    print()
+    print(
+        f"Trainingssätze: {len(texte)}"
+    )
 
-    vokabular = vokabular_erstellen(daten)
+    # ------------------------------------
+    # Tokenizer
+    # ------------------------------------
 
-    print(f"Vokabular: {len(vokabular)} Wörter")
+    tokenizer = Tokenizer()
 
-    antworten = antworten_erstellen(daten)
+    tokenizer.vokabular_erstellen(
+        texte
+    )
 
-    print(f"Antwortklassen: {len(antworten)}")
+    vocab_size = len(
+        tokenizer.vokabular
+    )
 
-    # Fragen und Zielwerte vorbereiten
+    print(
+        f"Vokabular: {vocab_size} Token"
+    )
+
+    # ------------------------------------
+    # Trainingsdaten erstellen
+    # ------------------------------------
+
     X = []
     Y = []
 
-    for eintrag in daten:
+    for text in texte:
 
-        frage = eintrag.get("frage", "")
-        antwort = eintrag.get("antwort", "")
+        tokens = tokenizer.encode(text)
 
-        if not frage or not antwort:
+        if len(tokens) < 2:
             continue
 
-        X.append(frage_vektor(frage, vokabular))
-        Y.append(antworten.index(antwort))
+        # Jeder Token soll den nächsten Token vorhersagen
+        eingabe = tokens[:-1]
+        ziel = tokens[1:]
 
-    X = torch.stack(X)
-    Y = torch.tensor(Y, dtype=torch.long)
+        X.append(eingabe)
+        Y.append(ziel)
 
-    print("")
-    print("Daten vorbereitet.")
-    print(f"Input-Größe: {X.shape[1]}")
-    print(f"Output-Größe: {len(antworten)}")
+    if not X:
 
-    # --------------------------------------------------
-    # Modell erstellen
-    # --------------------------------------------------
+        print("Keine gültigen Trainingsdaten.")
+        return
 
-    modell = KIModel(
-        input_size=len(vokabular),
-        hidden_size=128,
-        output_size=len(antworten)
+    max_len = max(
+        len(x)
+        for x in X
     )
 
-    verlustfunktion = nn.CrossEntropyLoss()
+    pad_id = tokenizer.vokabular[
+        "<PAD>"
+    ]
+
+    # Padding
+    X_padded = []
+    Y_padded = []
+
+    for x, y in zip(X, Y):
+
+        x = x + [
+            pad_id
+        ] * (
+            max_len - len(x)
+        )
+
+        y = y + [
+            pad_id
+        ] * (
+            max_len - len(y)
+        )
+
+        X_padded.append(x)
+        Y_padded.append(y)
+
+    X = torch.tensor(
+        X_padded,
+        dtype=torch.long
+    )
+
+    Y = torch.tensor(
+        Y_padded,
+        dtype=torch.long
+    )
+
+    print(
+        f"Sequenzlänge: {max_len}"
+    )
+
+    # ------------------------------------
+    # Modell
+    # ------------------------------------
+
+    modell = KIModel(
+        vocab_size=vocab_size,
+        embedding_size=128,
+        hidden_size=256
+    )
+
+    verlustfunktion = nn.CrossEntropyLoss(
+        ignore_index=pad_id
+    )
 
     optimizer = optim.Adam(
         modell.parameters(),
         lr=0.001
     )
 
-    # --------------------------------------------------
+    # ------------------------------------
     # Training
-    # --------------------------------------------------
+    # ------------------------------------
 
     epochen = 500
 
-    print("")
-    print("Training...")
-    print("")
+    print()
+    print("Training läuft...")
+    print()
 
     for epoche in range(epochen):
 
         optimizer.zero_grad()
 
-        ausgabe = modell(X)
+        ausgabe, _ = modell(X)
 
         verlust = verlustfunktion(
-            ausgabe,
-            Y
+            ausgabe.reshape(
+                -1,
+                vocab_size
+            ),
+            Y.reshape(-1)
         )
 
         verlust.backward()
@@ -207,24 +249,16 @@ def trainieren():
 
         if (epoche + 1) % 25 == 0:
 
-            vorhersagen = torch.argmax(
-                ausgabe,
-                dim=1
-            )
-
-            genauigkeit = (
-                vorhersagen == Y
-            ).float().mean().item() * 100
-
             print(
-                f"Epoche {epoche + 1}/{epochen} | "
-                f"Verlust: {verlust.item():.4f} | "
-                f"Genauigkeit: {genauigkeit:.1f}%"
+                f"Epoche "
+                f"{epoche + 1}/{epochen} | "
+                f"Verlust: "
+                f"{verlust.item():.4f}"
             )
 
-    # --------------------------------------------------
+    # ------------------------------------
     # Modell speichern
-    # --------------------------------------------------
+    # ------------------------------------
 
     os.makedirs(
         MODEL_ORDNER,
@@ -232,9 +266,23 @@ def trainieren():
     )
 
     speicherstand = {
-        "model_state": modell.state_dict(),
-        "vokabular": vokabular,
-        "antworten": antworten
+
+        "model_state": (
+            modell.state_dict()
+        ),
+
+        "vokabular": (
+            tokenizer.vokabular
+        ),
+
+        "config": {
+
+            "vocab_size": vocab_size,
+
+            "embedding_size": 128,
+
+            "hidden_size": 256
+        }
     }
 
     torch.save(
@@ -242,15 +290,16 @@ def trainieren():
         MODEL_DATEI
     )
 
-    print("")
-    print("================================")
+    print()
+    print("==============================")
     print("       TRAINING FERTIG")
-    print("================================")
-    print("")
-    print(f"Modell gespeichert:")
-    print(MODEL_DATEI)
-    print("")
+    print("==============================")
+    print()
+    print(
+        f"Gespeichert: {MODEL_DATEI}"
+    )
 
 
 if __name__ == "__main__":
+
     trainieren()
